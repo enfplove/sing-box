@@ -7,6 +7,11 @@ on:
         description: "Version name"
         required: true
         type: string
+      with_ebpf:
+        description: "Build with eBPF inbound (merges ebpf-latest branch)"
+        required: false
+        type: boolean
+        default: false
   push:
     branches:
       - ref1nd-features
@@ -186,7 +191,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
         with:
-          fetch-depth: 1
+          fetch-depth: 0
+      - name: Merge eBPF branch
+        if: github.event_name == 'workflow_dispatch' && inputs.with_ebpf
+        run: |-
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin ebpf-latest
+          git merge --no-edit origin/ebpf-latest
+      - name: Enable eBPF build tag
+        if: github.event_name == 'workflow_dispatch' && inputs.with_ebpf
+        run: |-
+          sed -i 's/"badlinkname", "tfogo_checklinkname0")/"badlinkname", "tfogo_checklinkname0", "with_ebpf")/' cmd/internal/build_libbox/main.go
+          grep -n "with_ebpf" cmd/internal/build_libbox/main.go
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
@@ -262,7 +279,7 @@ jobs:
           key: go-mod-linux-${{ hashFiles('go.sum') }}
           restore-keys: go-mod-linux-
       - name: Cache Go tool builds
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: ~/.cache/go-build
           key: go-build-tools-linux-${{ hashFiles('go.sum') }}
