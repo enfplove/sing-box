@@ -95,7 +95,7 @@ jobs:
           grep -q 'cilium/ebpf' go.mod || { echo "::error::cilium missing in go.mod"; exit 1; }
           [ "$(grep -c 'func (s \*Selector) References' protocol/group/selector.go)" = "1" ] || { echo "::error::selector References != 1"; exit 1; }
           [ "$(grep -c 'func (s \*URLTest) References' protocol/group/urltest.go)" = "1" ] || { echo "::error::urltest References != 1"; exit 1; }
-          if grep -q 'usePlatformInterface :=' protocol/tun/inbound.go; then echo "::error::orphan var remains"; exit 1; fi
+          [ "$(grep -c usePlatformInterface protocol/tun/inbound.go)" -ge 3 ] || { echo "::error::usePlatformInterface broken (<3 refs)"; exit 1; }
           echo "Repair verified."
 
       - name: Setup Go
