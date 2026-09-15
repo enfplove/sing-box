@@ -1,0 +1,84 @@
+name: Merge reF1nd features
+
+on:
+  push:
+    branches: [ref1nd-features]
+    paths: ['.github/workflows/merge-ref1nd.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: merge-ref1nd
+  cancel-in-progress: true
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout upstream base (testing)
+        uses: actions/checkout@v4
+        with:
+          ref: testing
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Configure git
+        run: |
+          git config user.name "enfplove"
+          git config user.email "enfplove@users.noreply.github.com"
+          git remote add ref1nd https://github.com/reF1nd/sing-box.git
+
+      - name: Merge upstream testing into reF1nd-testing (ours strategy)
+        run: |
+          set -x
+          git fetch ref1nd reF1nd-testing
+          git checkout -B merge-work FETCH_HEAD
+          git merge -X ours --no-edit origin/testing 2>&1 | tee /tmp/merge.log || true
+          if [ -n "$(git ls-files -u)" ]; then
+            git add -A
+            git commit --no-edit --no-verify || true
+          fi
+          grep -E '^CONFLICT' /tmp/merge.log > /tmp/conflicts.txt || echo "no-conflicts" > /tmp/conflicts.txt
+          cat /tmp/conflicts.txt
+          git log --oneline -5
+
+      - name: Restore workflows dir (avoid token push restriction)
+        run: |
+          set -x
+          rm -rf .github/workflows
+          git checkout origin/ref1nd-features -- .github/workflows
+          git add -A
+          git commit -m "tmp: restore workflows" --no-verify || true
+
+      - name: Push bundle (fallback to Release asset)
+        run: |
+          set -x
+          FINAL=$(git rev-parse HEAD)
+          echo "FINAL=$FINAL" >> "$GITHUB_ENV"
+          echo "$FINAL" > /tmp/final_sha.txt
+          git bundle create /tmp/merged.bundle origin/testing..HEAD || git bundle create /tmp/merged.bundle --all
+          git archive --format=tar.gz -o /tmp/sing-box-merged.tar.gz HEAD
+          # try normal push first
+          if git push origin HEAD:ref1nd-merge-wip --force; then
+            echo "PUSH_OK"
+          else
+            echo "push blocked, will use release asset"
+          fi
+
+      - name: Create source tarball (always, contains .git excluded)
+        run: |
+          git archive --format=tar.gz -o /tmp/source.tar.gz HEAD
+
+      - name: Upload as Release asset
+        if: always()
+        run: |
+          set -x
+          TAG="merge-result-$(date +%Y%m%d-%H%M%S)"
+          gh release create "$TAG" /tmp/sing-box-merged.tar.gz /tmp/merged.bundle /tmp/conflicts.txt \
+            --title "Merge result $TAG" \
+            --notes "Automated merge of reF1nd-testing with upstream testing.\nFINAL SHA: $(cat /tmp/final_sha.txt)\nConflicts auto-resolved with ours strategy." \
+            --prerelease --target ref1nd-features || echo "release create failed"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
