@@ -21,7 +21,6 @@ import (
 	"github.com/sagernet/sing-box/experimental"
 	"github.com/sagernet/sing-box/experimental/clashmode"
 	"github.com/sagernet/sing-box/experimental/deprecated"
-	"github.com/sagernet/sing-box/experimental/observability"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common"
@@ -50,11 +49,9 @@ type Server struct {
 	outbound       adapter.OutboundManager
 	provider       adapter.ProviderManager
 	endpoint       adapter.EndpointManager
-	inbound        adapter.InboundManager
 	logger         log.Logger
 	httpServer     *http.Server
 	trafficManager *trafficcontrol.Manager
-	observability  observability.Service
 	urlTestHistory *urltest.HistoryStorage
 	clashMode      *clashmode.Manager
 	logDebug       bool
@@ -102,14 +99,12 @@ func NewServer(ctx context.Context, logFactory log.ObservableFactory, options op
 		outbound:  service.FromContext[adapter.OutboundManager](ctx),
 		provider:  service.FromContext[adapter.ProviderManager](ctx),
 		endpoint:  service.FromContext[adapter.EndpointManager](ctx),
-		inbound:   service.FromContext[adapter.InboundManager](ctx),
 		logger:    logFactory.NewLogger("clash-api"),
 		httpServer: &http.Server{
 			Addr:    options.ExternalController,
 			Handler: chiRouter,
 		},
 		trafficManager:            trafficManager,
-		observability:             service.FromContext[observability.Service](ctx),
 		urlTestHistory:            urlTestHistory,
 		clashMode:                 clashMode,
 		logDebug:                  logFactory.Level() >= log.LevelDebug,
@@ -150,16 +145,12 @@ func NewServer(ctx context.Context, logFactory log.ObservableFactory, options op
 		r.Mount("/proxies", proxyRouter(s, s.router))
 		r.Mount("/rules", ruleRouter(s.router, s.dnsRouter))
 		r.Mount("/connections", connectionRouter(s.ctx, s.network, trafficManager))
-		if s.observability != nil {
-			r.Mount("/observability/v1", s.observability.Handler())
-		}
 		r.Mount("/providers/proxies", proxyProviderRouter(s))
 		r.Mount("/providers/rules", ruleProviderRouter(s.router))
 		r.Mount("/script", scriptRouter())
 		r.Mount("/profile", profileRouter())
 		r.Mount("/cache", cacheRouter(ctx))
 		r.Mount("/dns", dnsRouter(s.dnsRouter))
-		mountEBPFRouter(r, s.inbound)
 
 		if service.FromContext[adapter.PlatformInterface](ctx) == nil {
 			r.Mount("/restart", restartRouter(ctx, logFactory))

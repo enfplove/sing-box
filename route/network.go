@@ -43,7 +43,6 @@ type NetworkManager struct {
 	autoDetectInterface      bool
 	defaultOptions           adapter.NetworkOptions
 	autoRedirectOutputMark   uint32
-	ebpfSelfBypass           ebpfSelfBypassState
 	networkMonitor           tun.NetworkUpdateMonitor
 	interfaceMonitor         tun.DefaultInterfaceMonitor
 	packageManager           tun.PackageManager
