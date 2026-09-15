@@ -41,7 +41,7 @@ jobs:
           sed -i 's/\blistenConfig\b/listener/g' common/dialer/default.go
           sed -i '177,180d' protocol/group/selector.go
           sed -i '218,232d' protocol/group/urltest.go
-          sed -i '114d' protocol/tun/inbound.go
+          sed -i '113d' protocol/tun/inbound.go
 
       - name: Verify repairs
         run: |-
@@ -78,17 +78,7 @@ jobs:
 
       - name: Revert eBPF commits
         run: |-
-          set +e
           git revert --no-commit 487fd79602accd4a099a15c8516a69147f127ce7 c6c3d866f57631968cef347e121d5dffac53b1f9
-          STATUS=$?
-          set -e
-          if [ "$STATUS" -ne 0 ]; then
-            echo "Revert hit conflicts (expected: workflow files already removed). Resolving..."
-            git checkout HEAD -- .github 2>/dev/null || true
-            git status --porcelain | awk '$1 ~ /^(DU|UD|AA|DD|AU|UA)$/ {print $2}' | xargs -r git rm -f --
-            echo "--- status after resolve ---"
-            git status --porcelain | head -40
-          fi
 
       - name: Keep workflows directory intact
         run: |-
