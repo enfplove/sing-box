@@ -1,0 +1,135 @@
+name: Strip eBPF
+
+on:
+  push:
+    branches:
+      - ref1nd-features
+    paths:
+      - '.github/workflows/strip-ebpf.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: strip-ebpf
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  strip:
+    name: Strip eBPF from mainline and seed ebpf-latest
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
+        with:
+          ref: ref1nd-features
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |-
+          git config user.name "enfplove"
+          git config user.email "white067@hotmail.com"
+
+      - name: Create snapshot tag ebpf-full
+        run: |-
+          if git rev-parse -q --verify "refs/tags/ebpf-full" >/dev/null; then
+            echo "Tag ebpf-full already exists, skip."
+          else
+            git tag -a ebpf-full -m "Snapshot of mainline with full eBPF inbound (before strip)"
+            git push origin refs/tags/ebpf-full
+            echo "Tag ebpf-full created at $(git rev-parse --short HEAD)."
+          fi
+
+      - name: Revert eBPF commits
+        run: |-
+          if [ ! -d common/ebpf ] && [ ! -d protocol/ebpf ] && ! grep -q "registerEBPFInbound" include/registry.go 2>/dev/null; then
+            echo "Mainline already stripped. Skip revert."
+            echo "ALREADY_STRIPPED=1" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          set +e
+          git revert --no-commit 487fd79602accd4a099a15c8516a69147f127ce7 c6c3d866f57631968cef347e121d5dffac53b1f9
+          STATUS=$?
+          set -e
+          if [ "$STATUS" -ne 0 ]; then
+            echo "Revert hit conflicts (expected: workflow files already removed). Resolving..."
+            git checkout HEAD -- .github 2>/dev/null || true
+            git status --porcelain | awk '$1 ~ /^(DU|UD|AA|DD|AU|UA)$/ {print $2}' | xargs -r git rm -f --
+            echo "--- status after resolve ---"
+            git status --porcelain | head -40
+          fi
+
+      - name: Keep workflows directory intact
+        run: |-
+          git checkout HEAD -- .github
+          echo "--- staged changes (first 80) ---"
+          git status --porcelain | head -80
+
+      - name: Verify strip
+        run: |-
+          FAIL=0
+          if [ -d common/ebpf ]; then echo "::error::common/ebpf still exists"; FAIL=1; fi
+          if [ -d protocol/ebpf ]; then echo "::error::protocol/ebpf still exists"; FAIL=1; fi
+          if grep -rq "registerEBPFInbound" include/ 2>/dev/null; then
+            echo "::error::include/ still references registerEBPFInbound"
+            grep -rn "registerEBPFInbound" include/ || true
+            FAIL=1
+          fi
+          if grep -q "with_ebpf" cmd/internal/build_boxdd/main.go 2>/dev/null; then
+            echo "::error::build_boxdd still enables with_ebpf"
+            FAIL=1
+          fi
+          if grep -q "cilium/ebpf" go.mod 2>/dev/null; then
+            echo "::error::go.mod still contains cilium/ebpf"
+            FAIL=1
+          fi
+          for f in cmd/sing-box/cmd_tools_ebpf.go dns/transport/fakeip/store_ebpf.go option/ebpf.go include/ebpf.go include/ebpf_stub.go; do
+            if [ -f "$f" ]; then echo "::error::$f still exists"; FAIL=1; fi
+          done
+          if ls common/dialer/ebpf_self_bypass_* >/dev/null 2>&1; then echo "::error::ebpf_self_bypass files remain"; FAIL=1; fi
+          if ls experimental/clashapi/ebpf* >/dev/null 2>&1; then echo "::error::clashapi ebpf files remain"; FAIL=1; fi
+          if [ "$FAIL" -ne 0 ]; then exit 1; fi
+          echo "Strip verification passed."
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.26.8
+          cache: false
+
+      - name: Smoke build
+        run: |-
+          go build ./...
+          echo "Smoke build OK."
+
+      - name: Commit and push strip
+        run: |-
+          if [ "${ALREADY_STRIPPED:-0}" = "1" ]; then
+            echo "Skip commit (already stripped)."
+            exit 0
+          fi
+          git add -A
+          git commit -m "chore(ebpf): strip eBPF inbound from mainline
+
+          Revert reF1nd 487fd79 (feat(ebpf): add eBPF inbound implementation) and
+          c6c3d86 (Enable eBPF for SFL builds).
+
+          eBPF preserved in tag 'ebpf-full' and branch 'ebpf-latest'."
+          git push origin ref1nd-features
+
+      - name: Seed ebpf-latest branch
+        run: |-
+          if git ls-remote --exit-code --heads origin ebpf-latest >/dev/null 2>&1; then
+            echo "ebpf-latest already exists. Skip seeding."
+            exit 0
+          fi
+          git checkout -b ebpf-latest
+          git remote add chizi https://github.com/CHIZI-0618/sing-box.git
+          git fetch chizi ebpf-inbound
+          git merge --no-commit chizi/ebpf-inbound
+          git checkout ORIG_HEAD -- .github
+          git add .github
+          git commit --no-edit
+          git push origin ebpf-latest
+          echo "ebpf-latest seeded."
