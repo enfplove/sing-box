@@ -1,0 +1,46 @@
+name: Diagnose Build
+
+on:
+  push:
+    branches:
+      - ref1nd-features
+    paths:
+      - '.github/workflows/diag.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: diag
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    name: Run go build and dump full output
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
+        with:
+          ref: ref1nd-features
+          fetch-depth: 1
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.26.8
+          cache: false
+
+      - name: Build with full output capture
+        run: |-
+          set +e
+          go build ./... > /tmp/build.log 2>&1
+          EXIT=$?
+          set -e
+          echo "## go build exit code: $EXIT" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat /tmp/build.log >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "BUILD_EXIT=$EXIT"
+          if [ "$EXIT" = "0" ]; then echo "BUILD OK"; else echo "BUILD FAILED (details in summary)"; exit 1; fi
