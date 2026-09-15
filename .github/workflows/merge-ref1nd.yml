@@ -26,39 +26,53 @@ jobs:
 
       - name: Configure git
         run: |
-          set -x
           git config user.name "enfplove"
           git config user.email "enfplove@users.noreply.github.com"
           git remote add ref1nd https://github.com/reF1nd/sing-box.git
 
-      - name: Merge upstream testing into reF1nd-testing
-        id: domerge
+      - name: Merge upstream testing into reF1nd-testing (ours strategy)
         run: |
           set -x
           git fetch ref1nd reF1nd-testing
           git checkout -B merge-work FETCH_HEAD
-          git log --oneline -3
-          MERGE_RC=0
-          git merge origin/testing --no-edit --no-ff || MERGE_RC=$?
-          echo "merge_rc=$MERGE_RC" >> "$GITHUB_OUTPUT"
-          echo "$MERGE_RC" > /tmp/merge_rc.txt
-          if [ "$MERGE_RC" != "0" ]; then
-            git diff --name-only --diff-filter=U > /tmp/conflicts.txt || true
-            echo "conflict_count=$(wc -l < /tmp/conflicts.txt)" >> "$GITHUB_OUTPUT"
+          git merge -X ours --no-edit origin/testing 2>&1 | tee /tmp/merge.log || true
+          # finish merge if it stopped (e.g. modify/delete conflicts)
+          if [ -n "$(git ls-files -u)" ]; then
             git add -A
-            git commit -m "WIP merge upstream testing (markers preserved)" --no-verify || true
+            git rm --cached -r --ignore-unmatch .github/workflows 2>/dev/null || true
+            git commit --no-edit --no-verify || true
           fi
-          git log --oneline -5
+          grep -E '^CONFLICT' /tmp/merge.log > /tmp/conflicts.txt || echo "no-conflicts" > /tmp/conflicts.txt
+          echo "=== conflicts ==="
+          cat /tmp/conflicts.txt
 
-      - name: Push WIP result
-        if: always()
+      - name: Squash to single commit, keep workflows unchanged
+        run: |
+          set -x
+          # restore workflows to match ref1nd-features (strip workflow changes so GITHUB_TOKEN can push)
+          rm -rf .github/workflows
+          git checkout origin/ref1nd-features -- .github/workflows
+          git add -A
+          git commit -m "tmp: restore workflows" --no-verify || true
+          # build single squash commit on top of origin/ref1nd-features
+          SQUASH=$(git commit-tree HEAD^{tree} -p origin/ref1nd-features -m "Merge reF1nd-testing features onto upstream testing base (v1.15.0-alpha.4)\n\nSquashed merge; conflicts auto-resolved with ours (reF1nd) strategy.\nSee .github/merge-debug/ for conflict list.")
+          echo "SQUASH=$SQUASH" >> "$GITHUB_ENV"
+          git log --oneline -3 $SQUASH
+
+      - name: Attach debug info
         run: |
           set -x
           mkdir -p .github/merge-debug
-          cp /tmp/merge_rc.txt .github/merge-debug/merge_rc.txt 2>/dev/null || echo unknown > .github/merge-debug/merge_rc.txt
-          cp /tmp/conflicts.txt .github/merge-debug/MERGE_CONFLICTS.txt 2>/dev/null || echo "no conflicts" > .github/merge-debug/MERGE_CONFLICTS.txt
-          git rev-parse origin/testing FETCH_HEAD > .github/merge-debug/shas.txt 2>/dev/null || true
+          cp /tmp/merge.log .github/merge-debug/merge.log
+          cp /tmp/conflicts.txt .github/merge-debug/conflicts.txt
+          git checkout -B final-work "$SQUASH"
           git add -A
-          git commit -m "chore: merge debug info" --no-verify || true
-          git push origin merge-work:ref1nd-merge-wip --force
+          git commit -m "chore: attach merge debug info" --no-verify
+          FINAL=$(git rev-parse HEAD)
+          echo "FINAL=$FINAL" >> "$GITHUB_ENV"
+
+      - name: Push result
+        run: |
+          set -x
+          git push origin "$FINAL":ref1nd-merge-wip --force
           echo PUSH_DONE
