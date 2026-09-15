@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: write
+  workflows: write
 
 concurrency:
   group: merge-ref1nd
@@ -26,48 +27,39 @@ jobs:
 
       - name: Configure git
         run: |
+          set -x
           git config user.name "enfplove"
           git config user.email "enfplove@users.noreply.github.com"
-          git config core.editor true
           git remote add ref1nd https://github.com/reF1nd/sing-box.git
-          git fetch origin testing
 
-      - name: Merge reF1nd-testing with upstream testing
+      - name: Merge upstream testing into reF1nd-testing
+        id: domerge
         run: |
-          exec > >(tee -a /tmp/merge.log) 2>&1
+          set -x
           git fetch ref1nd reF1nd-testing
           git checkout -B merge-work FETCH_HEAD
+          git log --oneline -3
           MERGE_RC=0
           git merge origin/testing --no-edit --no-ff || MERGE_RC=$?
-          echo "MERGE_RC=$MERGE_RC"
-          echo "MERGE_RC=$MERGE_RC" >> "$GITHUB_ENV"
+          echo "merge_rc=$MERGE_RC" >> "$GITHUB_OUTPUT"
+          echo "$MERGE_RC" > /tmp/merge_rc.txt
           if [ "$MERGE_RC" != "0" ]; then
-            echo "=== CONFLICTED FILES ==="
-            git diff --name-only --diff-filter=U | tee /tmp/conflicts.txt
-            echo "=== CONFLICT COUNT: $(wc -l < /tmp/conflicts.txt) ==="
+            git diff --name-only --diff-filter=U > /tmp/conflicts.txt || true
+            echo "conflict_count=$(wc -l < /tmp/conflicts.txt)" >> "$GITHUB_OUTPUT"
             git add -A
-            git commit -m "WIP: merge upstream testing into reF1nd-testing (conflict markers preserved)" --no-verify || true
+            git commit -m "WIP merge upstream testing (markers preserved)" --no-verify || true
           fi
-          echo "=== RESULT LOG ==="
-          git log --oneline -6
+          git log --oneline -5
 
-      - name: Record status and push WIP branch
+      - name: Push WIP result
+        if: always()
         run: |
-          exec > >(tee -a /tmp/merge.log) 2>&1
-          mkdir -p .github
-          if [ -f /tmp/conflicts.txt ]; then
-            cp /tmp/conflicts.txt .github/MERGE_CONFLICTS.txt
-          fi
-          {
-            echo "merge_rc=${MERGE_RC:-unknown}"
-            if [ -f /tmp/conflicts.txt ]; then
-              echo "conflicts=$(wc -l < /tmp/conflicts.txt)"
-            else
-              echo "conflicts=0"
-            fi
-          } > .github/MERGE_STATUS.txt
-          cp /tmp/merge.log .github/MERGE_LOG.txt
-          git add .github/MERGE_STATUS.txt .github/MERGE_LOG.txt .github/MERGE_CONFLICTS.txt 2>/dev/null || true
-          git diff --cached --quiet || git commit -m "chore: record merge status" --no-verify
+          set -x
+          mkdir -p .github/merge-debug
+          cp /tmp/merge_rc.txt .github/merge-debug/merge_rc.txt 2>/dev/null || echo unknown > .github/merge-debug/merge_rc.txt
+          cp /tmp/conflicts.txt .github/merge-debug/MERGE_CONFLICTS.txt 2>/dev/null || echo "no conflicts" > .github/merge-debug/MERGE_CONFLICTS.txt
+          git rev-parse origin/testing FETCH_HEAD > .github/merge-debug/shas.txt 2>/dev/null || true
+          git add -A
+          git commit -m "chore: merge debug info" --no-verify || true
           git push origin merge-work:ref1nd-merge-wip --force
-          echo "PUSHED_OK"
+          echo PUSH_DONE
