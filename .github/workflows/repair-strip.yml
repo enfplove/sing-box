@@ -31,44 +31,53 @@ jobs:
           git config user.name "enfplove"
           git config user.email "white067@hotmail.com"
 
-      - name: Restore files damaged by placeholder commit
+      - name: Write seed conflict resolver
         run: |-
-          git checkout 3414d6276e1cc1144d001ee6a700c5ae0be3ec5a^ -- common/dialer/default.go protocol/group/selector.go protocol/group/urltest.go protocol/tun/inbound.go
-          git status --porcelain
+          cat > /tmp/resolve.py <<'PYEOF'
+          import sys
 
-      - name: Apply repairs
+          def resolve(path, old, new):
+              t = open(path).read()
+              if old not in t:
+                  if '<<<<<<<' not in t:
+                      print("skip (no conflict marker): " + path)
+                      return
+                  print("::error::pattern not found in " + path)
+                  sys.exit(1)
+              t = t.replace(old, new)
+              open(path, 'w').write(t)
+
+          resolve('common/listener/listener_tcp.go',
+          '<<<<<<< HEAD\n\tif l.listenOptions.ProxyProtocol {\n\t\ttcpListener = &proxyproto.Listener{Listener: tcpListener, AcceptNoHeader: l.listenOptions.ProxyProtocolAcceptNoHeader}\n\t}\n\tl.logger.Info("tcp server started at ", tcpListener.Addr())\n=======\n\tif !l.disableLog {\n\t\tl.logger.Info("tcp server started at ", tcpListener.Addr())\n\t}\n>>>>>>> chizi/ebpf-inbound',
+          '\tif l.listenOptions.ProxyProtocol {\n\t\ttcpListener = &proxyproto.Listener{Listener: tcpListener, AcceptNoHeader: l.listenOptions.ProxyProtocolAcceptNoHeader}\n\t}\n\tif !l.disableLog {\n\t\tl.logger.Info("tcp server started at ", tcpListener.Addr())\n\t}')
+
+          resolve('common/listener/listener_udp.go',
+          '<<<<<<< HEAD\n\tC "github.com/sagernet/sing-box/constant"\n=======\n\t"github.com/sagernet/sing-box/common/udpio"\n>>>>>>> chizi/ebpf-inbound',
+          '\tC "github.com/sagernet/sing-box/constant"\n\t"github.com/sagernet/sing-box/common/udpio"')
+
+          resolve('common/dialer/default.go',
+          '<<<<<<< HEAD\n\t\tlistener.Control = control.Append(listener.Control, markFunc)\n=======\n\t\tlistenConfig.Control = control.Append(listenConfig.Control, markFunc)\n\t\tdialer.Control, listenConfig.Control = appendEBPFSelfBypass(networkManager, dialer.Control, listenConfig.Control)\n>>>>>>> chizi/ebpf-inbound',
+          '\t\tlistener.Control = control.Append(listener.Control, markFunc)\n\t\tdialer.Control, listener.Control = appendEBPFSelfBypass(networkManager, dialer.Control, listener.Control)')
+
+          for p in ['common/listener/listener_tcp.go', 'common/listener/listener_udp.go', 'common/dialer/default.go']:
+              t = open(p).read()
+              if '<<<<<<<' in t or '>>>>>>>' in t:
+                  print("::error::conflict markers remain in " + p)
+                  sys.exit(1)
+          print("All seed conflicts resolved.")
+          PYEOF
+          python3 -c "import ast; ast.parse(open('/tmp/resolve.py').read()); print('resolver syntax OK')"
+
+      - name: Repair mainline (tree-restore 11 damaged files from reF1nd-testing)
         run: |-
-          sed -i 's/\blistenConfig\b/listener/g' common/dialer/default.go
-          sed -i '177,180d' protocol/group/selector.go
-          sed -i '218,232d' protocol/group/urltest.go
-          sed -i '113d' protocol/tun/inbound.go
-
-      - name: Verify repairs
-        run: |-
-          FAIL=0
-          if [ "$(grep -c 'func (s \*Selector) References' protocol/group/selector.go)" != "1" ]; then echo "::error::selector References count != 1"; FAIL=1; fi
-          if [ "$(grep -c 'func (s \*URLTest) References' protocol/group/urltest.go)" != "1" ]; then echo "::error::urltest References count != 1"; FAIL=1; fi
-          if grep -q 'usePlatformInterface :=' protocol/tun/inbound.go; then echo "::error::orphan var remains"; FAIL=1; fi
-          if grep -q 'listenConfig' common/dialer/default.go; then echo "::error::listenConfig remains"; FAIL=1; fi
-          if grep -q '__REPLACE__' common/dialer/default.go protocol/group/selector.go protocol/group/urltest.go protocol/tun/inbound.go; then echo "::error::placeholder remains"; FAIL=1; fi
-          if [ "$FAIL" -ne 0 ]; then exit 1; fi
-          echo "Repairs verified."
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: 1.26.8
-          cache: false
-
-      - name: Smoke build (with eBPF)
-        run: |-
-          go build ./...
-          echo "Smoke build with eBPF OK."
-
-      - name: Commit and push repair
-        run: |-
+          git remote add refnd https://github.com/reF1nd/sing-box.git
+          git fetch refnd reF1nd-testing
+          REFND=$(git rev-parse refnd/reF1nd-testing)
+          for f in cmd/internal/app_store_connect/main.go common/dialer/default.go go.mod go.sum protocol/anytls/outbound.go protocol/group/selector.go protocol/group/urltest.go protocol/tailscale/endpoint.go protocol/tun/inbound.go service/oomkiller/timer_darwin.go transport/wireguard/port.go; do
+            git show "$REFND:$f" > "$f"
+          done
           git add -A
-          git commit -m "fix: repair merge artifacts blocking compilation"
+          git commit -m "fix: restore 11 files damaged by -X ours merge (tree-level from reF1nd-testing)"
           git push origin ref1nd-features
 
       - name: Tag snapshot ebpf-full
@@ -76,43 +85,58 @@ jobs:
           git tag -fa ebpf-full -m "Snapshot of repaired mainline with full eBPF inbound (before strip)"
           git push -f origin refs/tags/ebpf-full
 
-      - name: Revert eBPF commits
+      - name: Verify repair
         run: |-
-          git revert --no-commit 487fd79602accd4a099a15c8516a69147f127ce7 c6c3d866f57631968cef347e121d5dffac53b1f9
+          test -d common/ebpf || { echo "::error::common/ebpf missing"; exit 1; }
+          grep -q 'cilium/ebpf' go.mod || { echo "::error::cilium missing in go.mod"; exit 1; }
+          [ "$(grep -c 'func (s \*Selector) References' protocol/group/selector.go)" = "1" ] || { echo "::error::selector References != 1"; exit 1; }
+          [ "$(grep -c 'func (s \*URLTest) References' protocol/group/urltest.go)" = "1" ] || { echo "::error::urltest References != 1"; exit 1; }
+          if grep -q 'usePlatformInterface :=' protocol/tun/inbound.go; then echo "::error::orphan var remains"; exit 1; fi
+          if grep -q '__REPLACE__' protocol/tun/inbound.go protocol/group/selector.go protocol/group/urltest.go common/dialer/default.go; then echo "::error::placeholder remains"; exit 1; fi
+          echo "Repair verified."
 
-      - name: Keep workflows directory intact
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.26.8
+          cache: false
+
+      - name: Smoke build with eBPF (linux)
         run: |-
-          git checkout HEAD -- .github
-          git status --porcelain | head -80
+          go build ./...
+          echo "Smoke build WITH eBPF OK."
+
+      - name: Strip eBPF (tree-level revert of 487fd79 + c6c3d86)
+        run: |-
+          git diff --name-status e3e02346c4a51bd391d3a7e60d6bdf3227a76096 487fd79602accd4a099a15c8516a69147f127ce7 > /tmp/fs487.txt
+          grep '^A' /tmp/fs487.txt | awk -F'\t' '{print $2}' | grep -v '^\.github/' | while read f; do git rm -q --ignore-unmatch "$f"; done
+          grep '^M' /tmp/fs487.txt | awk -F'\t' '{print $2}' | while read f; do git checkout e3e02346c4a51bd391d3a7e60d6bdf3227a76096 -- "$f"; done
+          git checkout a57b1e6cd372028e9306bca78c722ce0752524f6 -- cmd/internal/build_boxdd/main.go
+          git add -A
+          git commit -m "chore(ebpf): strip eBPF inbound from mainline (tree-level revert of 487fd79+c6c3d86)"
+          git push origin ref1nd-features
 
       - name: Verify strip
         run: |-
           FAIL=0
-          if [ -d common/ebpf ]; then echo "::error::common/ebpf still exists"; FAIL=1; fi
-          if [ -d protocol/ebpf ]; then echo "::error::protocol/ebpf still exists"; FAIL=1; fi
-          if grep -rq "registerEBPFInbound" include/ 2>/dev/null; then echo "::error::include still references registerEBPFInbound"; FAIL=1; fi
-          if grep -q "with_ebpf" cmd/internal/build_boxdd/main.go 2>/dev/null; then echo "::error::build_boxdd still enables with_ebpf"; FAIL=1; fi
-          if grep -q "cilium/ebpf" go.mod 2>/dev/null; then echo "::error::go.mod still contains cilium/ebpf"; FAIL=1; fi
+          [ ! -d common/ebpf ] || { echo "::error::common/ebpf still exists"; FAIL=1; }
+          [ ! -d protocol/ebpf ] || { echo "::error::protocol/ebpf still exists"; FAIL=1; }
+          if grep -q 'cilium/ebpf' go.mod; then echo "::error::go.mod still contains cilium/ebpf"; FAIL=1; fi
           for f in cmd/sing-box/cmd_tools_ebpf.go dns/transport/fakeip/store_ebpf.go option/ebpf.go include/ebpf.go include/ebpf_stub.go; do
-            if [ -f "$f" ]; then echo "::error::$f still exists"; FAIL=1; fi
+            [ ! -f "$f" ] || { echo "::error::$f still exists"; FAIL=1; }
           done
           if ls common/dialer/ebpf_self_bypass_* >/dev/null 2>&1; then echo "::error::ebpf_self_bypass files remain"; FAIL=1; fi
           if ls experimental/clashapi/ebpf* >/dev/null 2>&1; then echo "::error::clashapi ebpf files remain"; FAIL=1; fi
-          if [ "$FAIL" -ne 0 ]; then exit 1; fi
+          if grep -rq 'registerEBPFInbound' include/ 2>/dev/null; then echo "::error::include still references registerEBPFInbound"; FAIL=1; fi
+          if [ "$FAIL" = "1" ]; then exit 1; fi
           echo "Strip verification passed."
 
-      - name: Smoke build (without eBPF)
+      - name: Smoke build without eBPF (linux)
         run: |-
           go build ./...
-          echo "Smoke build without eBPF OK."
+          echo "Smoke build WITHOUT eBPF OK."
 
-      - name: Commit and push strip
-        run: |-
-          git add -A
-          git commit -m "chore(ebpf): strip eBPF inbound from mainline"
-          git push origin ref1nd-features
-
-      - name: Seed ebpf-latest branch
+      - name: Seed ebpf-latest branch (merge CHIZI eBPF)
         run: |-
           if git ls-remote --exit-code --heads origin ebpf-latest >/dev/null 2>&1; then
             echo "ebpf-latest already exists. Skip seeding."
@@ -121,9 +145,22 @@ jobs:
           git checkout -b ebpf-latest
           git remote add chizi https://github.com/CHIZI-0618/sing-box.git
           git fetch chizi ebpf-inbound
-          git merge --no-commit chizi/ebpf-inbound
+          git merge --no-commit chizi/ebpf-inbound || true
+          git show :2:go.sum > /tmp/ours.sum 2>/dev/null || : > /tmp/ours.sum
+          git show :3:go.sum > /tmp/theirs.sum 2>/dev/null || : > /tmp/theirs.sum
+          cat /tmp/ours.sum /tmp/theirs.sum | sort -u > go.sum
+          git add go.sum
+          python3 /tmp/resolve.py
+          git diff --name-only --diff-filter=A ORIG_HEAD -- .github | xargs -r rm -f --
           git checkout ORIG_HEAD -- .github
           git add .github
+          git add common/listener/listener_tcp.go common/listener/listener_udp.go common/dialer/default.go
+          UNRESOLVED=$(git ls-files -u | awk '{print $4}' | sort -u)
+          if [ -n "$UNRESOLVED" ]; then
+            echo "::error::unresolved conflicts remain:"
+            echo "$UNRESOLVED"
+            exit 1
+          fi
           git commit --no-edit
           git push origin ebpf-latest
           echo "ebpf-latest seeded."
