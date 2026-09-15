@@ -36,43 +36,49 @@ jobs:
           git fetch ref1nd reF1nd-testing
           git checkout -B merge-work FETCH_HEAD
           git merge -X ours --no-edit origin/testing 2>&1 | tee /tmp/merge.log || true
-          # finish merge if it stopped (e.g. modify/delete conflicts)
           if [ -n "$(git ls-files -u)" ]; then
             git add -A
-            git rm --cached -r --ignore-unmatch .github/workflows 2>/dev/null || true
             git commit --no-edit --no-verify || true
           fi
           grep -E '^CONFLICT' /tmp/merge.log > /tmp/conflicts.txt || echo "no-conflicts" > /tmp/conflicts.txt
-          echo "=== conflicts ==="
           cat /tmp/conflicts.txt
+          git log --oneline -5
 
-      - name: Squash to single commit, keep workflows unchanged
+      - name: Restore workflows dir (avoid token push restriction)
         run: |
           set -x
-          # restore workflows to match ref1nd-features (strip workflow changes so GITHUB_TOKEN can push)
           rm -rf .github/workflows
           git checkout origin/ref1nd-features -- .github/workflows
           git add -A
           git commit -m "tmp: restore workflows" --no-verify || true
-          # build single squash commit on top of origin/ref1nd-features
-          SQUASH=$(git commit-tree HEAD^{tree} -p origin/ref1nd-features -m "Merge reF1nd-testing features onto upstream testing base (v1.15.0-alpha.4)\n\nSquashed merge; conflicts auto-resolved with ours (reF1nd) strategy.\nSee .github/merge-debug/ for conflict list.")
-          echo "SQUASH=$SQUASH" >> "$GITHUB_ENV"
-          git log --oneline -3 $SQUASH
 
-      - name: Attach debug info
+      - name: Push bundle (fallback to Release asset)
         run: |
           set -x
-          mkdir -p .github/merge-debug
-          cp /tmp/merge.log .github/merge-debug/merge.log
-          cp /tmp/conflicts.txt .github/merge-debug/conflicts.txt
-          git checkout -B final-work "$SQUASH"
-          git add -A
-          git commit -m "chore: attach merge debug info" --no-verify
           FINAL=$(git rev-parse HEAD)
           echo "FINAL=$FINAL" >> "$GITHUB_ENV"
+          echo "$FINAL" > /tmp/final_sha.txt
+          git bundle create /tmp/merged.bundle origin/testing..HEAD || git bundle create /tmp/merged.bundle --all
+          git archive --format=tar.gz -o /tmp/sing-box-merged.tar.gz HEAD
+          # try normal push first
+          if git push origin HEAD:ref1nd-merge-wip --force; then
+            echo "PUSH_OK"
+          else
+            echo "push blocked, will use release asset"
+          fi
 
-      - name: Push result
+      - name: Create source tarball (always, contains .git excluded)
+        run: |
+          git archive --format=tar.gz -o /tmp/source.tar.gz HEAD
+
+      - name: Upload as Release asset
+        if: always()
         run: |
           set -x
-          git push origin "$FINAL":ref1nd-merge-wip --force
-          echo PUSH_DONE
+          TAG="merge-result-$(date +%Y%m%d-%H%M%S)"
+          gh release create "$TAG" /tmp/sing-box-merged.tar.gz /tmp/merged.bundle /tmp/conflicts.txt \
+            --title "Merge result $TAG" \
+            --notes "Automated merge of reF1nd-testing with upstream testing.\nFINAL SHA: $(cat /tmp/final_sha.txt)\nConflicts auto-resolved with ours strategy." \
+            --prerelease --target ref1nd-features || echo "release create failed"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
