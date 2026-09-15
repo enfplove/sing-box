@@ -10,6 +10,19 @@ on:
   push:
     branches:
       - ref1nd-features
+    paths:
+      - 'cmd/**'
+      - 'common/**'
+      - 'option/**'
+      - 'protocol/**'
+      - 'route/**'
+      - 'experimental/**'
+      - 'adapter/**'
+      - 'constant/**'
+      - 'include/**'
+      - 'libbox/**'
+      - 'go.mod'
+      - 'go.sum'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
