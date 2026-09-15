@@ -204,6 +204,11 @@ jobs:
         run: |-
           sed -i 's/"badlinkname", "tfogo_checklinkname0")/"badlinkname", "tfogo_checklinkname0", "with_ebpf")/' cmd/internal/build_libbox/main.go
           grep -n "with_ebpf" cmd/internal/build_libbox/main.go
+      - name: Check eBPF module diff
+        if: github.event_name == 'workflow_dispatch' && inputs.with_ebpf
+        run: |-
+          go mod tidy -tags=with_ebpf -diff
+          git diff -- go.mod go.sum
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
