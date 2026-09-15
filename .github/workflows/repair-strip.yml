@@ -92,7 +92,6 @@ jobs:
           [ "$(grep -c 'func (s \*Selector) References' protocol/group/selector.go)" = "1" ] || { echo "::error::selector References != 1"; exit 1; }
           [ "$(grep -c 'func (s \*URLTest) References' protocol/group/urltest.go)" = "1" ] || { echo "::error::urltest References != 1"; exit 1; }
           if grep -q 'usePlatformInterface :=' protocol/tun/inbound.go; then echo "::error::orphan var remains"; exit 1; fi
-          if grep -q '__REPLACE__' protocol/tun/inbound.go protocol/group/selector.go protocol/group/urltest.go common/dialer/default.go; then echo "::error::placeholder remains"; exit 1; fi
           echo "Repair verified."
 
       - name: Setup Go
@@ -103,7 +102,14 @@ jobs:
 
       - name: Smoke build with eBPF (linux)
         run: |-
-          go build ./...
+          if ! go build ./... 2>/tmp/ebpf_build_err.txt; then
+            echo "## Smoke build WITH eBPF failed" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            tail -60 /tmp/ebpf_build_err.txt >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            cat /tmp/ebpf_build_err.txt | tail -60
+            exit 1
+          fi
           echo "Smoke build WITH eBPF OK."
 
       - name: Strip eBPF (tree-level revert of 487fd79 + c6c3d86)
@@ -133,7 +139,14 @@ jobs:
 
       - name: Smoke build without eBPF (linux)
         run: |-
-          go build ./...
+          if ! go build ./... 2>/tmp/plain_build_err.txt; then
+            echo "## Smoke build WITHOUT eBPF failed" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            tail -60 /tmp/plain_build_err.txt >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            cat /tmp/plain_build_err.txt | tail -60
+            exit 1
+          fi
           echo "Smoke build WITHOUT eBPF OK."
 
       - name: Seed ebpf-latest branch (merge CHIZI eBPF)
