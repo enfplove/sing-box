@@ -76,9 +76,13 @@ jobs:
           for f in cmd/internal/app_store_connect/main.go common/dialer/default.go go.mod go.sum protocol/anytls/outbound.go protocol/group/selector.go protocol/group/urltest.go protocol/tailscale/endpoint.go protocol/tun/inbound.go service/oomkiller/timer_darwin.go transport/wireguard/port.go; do
             git show "$REFND:$f" > "$f"
           done
-          git add -A
-          git commit -m "fix: restore 11 files damaged by -X ours merge (tree-level from reF1nd-testing)"
-          git push origin ref1nd-features
+          if git diff --cached --quiet && git diff --quiet; then
+            echo "Repair already applied. Skip commit."
+          else
+            git add -A
+            git commit -m "fix: restore 11 files damaged by -X ours merge (tree-level from reF1nd-testing)"
+            git push origin ref1nd-features
+          fi
 
       - name: Tag snapshot ebpf-full
         run: |-
