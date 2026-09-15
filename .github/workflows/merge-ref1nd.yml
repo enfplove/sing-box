@@ -3,85 +3,71 @@ name: Merge reF1nd features
 on:
   push:
     branches: [ref1nd-features]
-    paths: ['.github/workflows/merge-ref1nd.yml', '.github/trigger-merge']
+    paths: ['.github/workflows/merge-ref1nd.yml']
   workflow_dispatch:
-    inputs:
-      base:
-        description: 'Base branch with upstream code'
-        required: true
-        default: 'testing'
-      feature:
-        description: 'reF1nd feature ref (branch or SHA)'
-        required: true
-        default: 'reF1nd-testing'
-      use_merge:
-        description: 'Use merge commit instead of cherry-pick replay'
-        required: false
-        default: 'false'
 
 permissions:
   contents: write
 
 concurrency:
-  group: merge-ref1nd-${{ github.ref }}
-  cancel-in-progress: false
+  group: merge-ref1nd
+  cancel-in-progress: true
 
 jobs:
   merge:
-    # skip when the push is the workflow's own result push (no feature base file change)
-    if: github.event_name == 'workflow_dispatch' || !startsWith(github.event.head_commit.message, 'Merge upstream')
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout base
+      - name: Checkout upstream base (testing)
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.base || 'testing' }}
+          ref: testing
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Configure committer
+      - name: Configure git
         run: |
           git config user.name "enfplove"
           git config user.email "enfplove@users.noreply.github.com"
-
-      - name: Fetch feature ref
-        run: |
+          git config core.editor true
           git remote add ref1nd https://github.com/reF1nd/sing-box.git
-          git fetch ref1nd ${{ inputs.feature || 'reF1nd-testing' }}
+          git fetch origin testing
 
-      - name: Merge or replay
+      - name: Merge reF1nd-testing with upstream testing
         run: |
-          if [ "${{ inputs.use_merge }}" = "true" ]; then
-            git merge --no-ff --no-edit FETCH_HEAD || {
-              echo '::error::Merge conflicts detected. Listing conflicted files:'
-              git diff --name-only --diff-filter=U
-              exit 1
-            }
-          else
-            # Replay upstream-only commits (in base, not in feature) on top of the feature branch
-            git checkout -B temp-work FETCH_HEAD
-            # commits in origin/base NOT reachable from FETCH_HEAD, oldest first
-            for sha in $(git rev-list --reverse FETCH_HEAD..origin/${{ inputs.base || 'testing' }}]); do
-              echo "Cherry-picking: $(git log -1 --format='%h %s' $sha)"
-              if ! git cherry-pick $sha; then
-                if git diff --name-only --diff-filter=U | grep -q .; then
-                  git checkout --theirs . 2>/dev/null || true
-                  git add -A
-                  git cherry-pick --continue --no-edit || { echo "::error::cherry-pick continue failed for $sha"; exit 1; }
-                else
-                  git cherry-pick --abort 2>/dev/null || true
-                  echo "::error::cherry-pick failed for $sha"
-                  exit 1
-                fi
-              fi
-            done
+          exec > >(tee -a /tmp/merge.log) 2>&1
+          git fetch ref1nd reF1nd-testing
+          git checkout -B merge-work FETCH_HEAD
+          MERGE_RC=0
+          git merge origin/testing --no-edit --no-ff || MERGE_RC=$?
+          echo "MERGE_RC=$MERGE_RC"
+          echo "MERGE_RC=$MERGE_RC" >> "$GITHUB_ENV"
+          if [ "$MERGE_RC" != "0" ]; then
+            echo "=== CONFLICTED FILES ==="
+            git diff --name-only --diff-filter=U | tee /tmp/conflicts.txt
+            echo "=== CONFLICT COUNT: $(wc -l < /tmp/conflicts.txt) ==="
+            git add -A
+            git commit -m "WIP: merge upstream testing into reF1nd-testing (conflict markers preserved)" --no-verify || true
           fi
+          echo "=== RESULT LOG ==="
+          git log --oneline -6
 
-      - name: Show result
+      - name: Record status and push WIP branch
         run: |
-          echo "HEAD is now: $(git log -1 --oneline)"
-          echo "Commits on top of feature branch: $(git rev-list --count FETCH_HEAD..HEAD)"
-
-      - name: Push result to ref1nd-features
-        run: |
-          git push origin temp-work:ref1nd-features --force-with-lease
+          exec > >(tee -a /tmp/merge.log) 2>&1
+          mkdir -p .github
+          if [ -f /tmp/conflicts.txt ]; then
+            cp /tmp/conflicts.txt .github/MERGE_CONFLICTS.txt
+          fi
+          {
+            echo "merge_rc=${MERGE_RC:-unknown}"
+            if [ -f /tmp/conflicts.txt ]; then
+              echo "conflicts=$(wc -l < /tmp/conflicts.txt)"
+            else
+              echo "conflicts=0"
+            fi
+          } > .github/MERGE_STATUS.txt
+          cp /tmp/merge.log .github/MERGE_LOG.txt
+          git add .github/MERGE_STATUS.txt .github/MERGE_LOG.txt .github/MERGE_CONFLICTS.txt 2>/dev/null || true
+          git diff --cached --quiet || git commit -m "chore: record merge status" --no-verify
+          git push origin merge-work:ref1nd-merge-wip --force
+          echo "PUSHED_OK"
