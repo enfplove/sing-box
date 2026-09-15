@@ -1,0 +1,19 @@
+name: Cleanup release
+
+on:
+  push:
+    branches: [ref1nd-features]
+    paths: ['.github/workflows/cleanup.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete temporary merge result release
+        run: |
+          gh api -X DELETE /repos/enfplove/sing-box/releases/388983258 && echo "release deleted" || echo "release already gone"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
