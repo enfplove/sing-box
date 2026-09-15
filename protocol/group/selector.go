@@ -175,6 +175,10 @@ func (s *Selector) SelectPreMatchOutbound(metadata *adapter.InboundContext, sele
 	return selectOutbound(s.selected.Load())
 }
 
+func (s *Selector) References() []string {
+	return []string{s.Now()}
+}
+
 func (s *Selector) SelectOutbound(tag string) bool {
 	s.providerAccess.Lock()
 	s.stateAccess.RLock()

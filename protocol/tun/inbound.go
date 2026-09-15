@@ -110,6 +110,7 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 	})
 
 	platformInterface := service.FromContext[adapter.PlatformInterface](ctx)
+	usePlatformInterface := platformInterface != nil && platformInterface.UsePlatformInterface()
 	if options.NetNs != "" && !C.IsLinux {
 		return nil, E.New("`netns` is only supported on Linux")
 	}

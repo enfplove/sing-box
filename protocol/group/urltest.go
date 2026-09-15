@@ -216,6 +216,21 @@ func (s *URLTest) SelectPreMatchOutbound(metadata *adapter.InboundContext, selec
 	return selectOutbound(selectedOutbound)
 }
 
+func (s *URLTest) References() []string {
+	group := s.group
+	if group == nil {
+		return nil
+	}
+	var references []string
+	if group.selectedOutboundTCP != nil {
+		references = append(references, group.selectedOutboundTCP.Tag())
+	}
+	if group.selectedOutboundUDP != nil && group.selectedOutboundUDP != group.selectedOutboundTCP {
+		references = append(references, group.selectedOutboundUDP.Tag())
+	}
+	return references
+}
+
 func (s *URLTest) URLTest(ctx context.Context) (map[string]uint16, error) {
 	return s.group.URLTest(ctx)
 }

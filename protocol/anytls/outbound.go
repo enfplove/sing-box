@@ -141,6 +141,18 @@ func (h *Outbound) CloseIdleConnections() {
 	}
 }
 
+func (h *Outbound) InterfaceUpdated(ctx context.Context) {
+	h.client.Reset()
+}
+
+func (h *Outbound) SetKeepIdleConnections(keep bool) {
+	h.client.SetKeepIdleConnections(keep)
+}
+
+func (h *Outbound) CloseIdleConnections() {
+	h.client.CloseIdleConnections()
+}
+
 func (h *Outbound) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
 	ctx, metadata := adapter.ExtendContext(ctx)
 	metadata.Outbound = h.Tag()

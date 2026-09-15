@@ -286,6 +286,13 @@ func (t *Endpoint) References() []string {
 	return []string{t.detour}
 }
 
+func (t *Endpoint) References() []string {
+	if t.detour == "" {
+		return nil
+	}
+	return []string{t.detour}
+}
+
 func (t *Endpoint) Start(stage adapter.StartStage) error {
 	switch stage {
 	case adapter.StartStateInitialize:
