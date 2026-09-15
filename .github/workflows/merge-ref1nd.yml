@@ -1,0 +1,82 @@
+name: Merge reF1nd features
+
+on:
+  workflow_dispatch:
+    inputs:
+      base:
+        description: 'Base branch with upstream code'
+        required: true
+        default: 'master'
+      feature:
+        description: 'reF1nd feature ref (branch or SHA)'
+        required: true
+        default: 'reF1nd-testing'
+      use_merge:
+        description: 'Use merge commit instead of cherry-pick replay'
+        required: false
+        default: 'false'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout base
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.base || 'master' }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Configure committer
+        run: |
+          git config user.name "enfplove"
+          git config user.email "enfplove@users.noreply.github.com"
+
+      - name: Fetch feature ref
+        run: |
+          git remote add ref1nd https://github.com/reF1nd/sing-box.git
+          git fetch ref1nd ${{ inputs.feature }}
+
+      - name: Merge or replay
+        run: |
+          if [ "${{ inputs.use_merge }}" = "true" ]; then
+            git merge --no-ff --no-edit FETCH_HEAD || {
+              echo '::error::Merge conflicts detected. Listing conflicted files:'
+              git diff --name-only --diff-filter=U
+              exit 1
+            }
+          else
+            # Replay upstream-only commits (in base, not in feature) on top of the feature branch
+            git checkout -B temp-work FETCH_HEAD
+            # commits in origin/base NOT reachable from FETCH_HEAD, oldest first
+            for sha in $(git rev-list --reverse FETCH_HEAD..origin/${{ inputs.base || 'master' }}); do
+              echo "Cherry-picking: $(git log -1 --format='%h %s' $sha)"
+              if ! git cherry-pick $sha; then
+                if git diff --name-only --diff-filter=U | grep -q .; then
+                  git checkout --theirs . 2>/dev/null || true
+                  git add -A
+                  git cherry-pick --continue --no-edit || { echo "::error::cherry-pick continue failed for $sha"; exit 1; }
+                else
+                  git cherry-pick --abort 2>/dev/null || true
+                  echo "::error::cherry-pick failed for $sha"
+                  exit 1
+                fi
+              fi
+            done
+          fi
+
+      - name: Show result
+        run: |
+          echo "HEAD is now: $(git log -1 --oneline)"
+          echo "Commits on top of feature branch: $(git rev-list --count FETCH_HEAD..HEAD)"
+
+      - name: Push result to ref1nd-features
+        run: |
+          git push origin temp-work:ref1nd-features --force-with-lease
