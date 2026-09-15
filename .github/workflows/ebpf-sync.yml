@@ -1,0 +1,70 @@
+name: Sync eBPF from CHIZI-0618
+
+on:
+  schedule:
+    - cron: '0 2 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: ebpf-sync
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    name: Sync mainline + CHIZI eBPF into ebpf-latest
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout ebpf-latest
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
+        with:
+          ref: ebpf-latest
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |-
+          git config user.name "enfplove"
+          git config user.email "white067@hotmail.com"
+
+      - name: Merge mainline (ref1nd-features)
+        run: |-
+          git fetch origin ref1nd-features
+          if git merge-base --is-ancestor origin/ref1nd-features HEAD; then
+            echo "Mainline already merged."
+            exit 0
+          fi
+          git merge --no-commit origin/ref1nd-features
+          git checkout ORIG_HEAD -- .github
+          git add .github
+          git commit --no-edit
+
+      - name: Merge CHIZI eBPF (ebpf-inbound)
+        run: |-
+          git remote add chizi https://github.com/CHIZI-0618/sing-box.git
+          git fetch chizi ebpf-inbound
+          if git merge-base --is-ancestor chizi/ebpf-inbound HEAD; then
+            echo "CHIZI eBPF already merged."
+            exit 0
+          fi
+          git merge --no-commit chizi/ebpf-inbound
+          git checkout ORIG_HEAD -- .github
+          git add .github
+          git commit --no-edit
+
+      - name: Check for changes
+        id: changes
+        run: |-
+          if git diff --quiet origin/ebpf-latest HEAD; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "--- incoming commits ---"
+            git log --oneline origin/ebpf-latest..HEAD | head -20
+          fi
+
+      - name: Push
+        if: steps.changes.outputs.changed == 'true'
+        run: |-
+          git push origin ebpf-latest
