@@ -207,7 +207,7 @@ jobs:
       - name: Check eBPF module diff
         if: github.event_name == 'workflow_dispatch' && inputs.with_ebpf
         run: |-
-          go mod tidy -tags=with_ebpf -diff
+          GOFLAGS=-tags=with_ebpf go mod tidy -diff
           git diff -- go.mod go.sum
       - name: Setup Go
         uses: actions/setup-go@v5
